@@ -16,6 +16,7 @@
 
 #include "cinn/hlir/framework/op_lowering_util.h"
 #include "cinn/hlir/op/external_api_registry.h"
+#include "cinn/ir/ir_base.h"
 #include "cinn/ir/ir_schedule.h"
 #include "cinn/optim/transform_gpu_forloop.h"
 
@@ -249,6 +250,58 @@ std::vector<ir::LoweredFunc> OpLowerer::IRLowerOpWithoutSchedule(IRComputeFuncti
   return {func};
 }
 
+// TODO(clean): buffer is nullptr
+std::vector<ir::LoweredFunc> ConstructLoweredFunc(Expr expr,
+                                                  const GroupPtr& group,
+                                                  std::vector<ir::Tensor>& arg_tensors,
+                                                  std::unordered_map<std::string, ir::Tensor>& tensor_map) {
+  ir::ModuleExpr mod_expr({expr});
+  ir::IRSchedule ir_sch(mod_expr);
+  ir_sch.MergeExprs();
+  // function args
+  group->input_names.clear();
+  std::vector<ir::Argument> func_args;
+  for (auto& args : arg_tensors) {
+    // input node data name.
+    group->input_names.push_back(args->name);
+    // input args
+    func_args.emplace_back(args->buffer, ir::Argument::IO::kInput);
+  }
+
+  group->output_names.clear();
+  for (auto& node : group->output_nodes) {
+    // output node data name.
+    for (auto node_data : GetAllNodeData(node)) {
+      group->output_names.push_back(node_data->id());
+    }
+    // collect all output tensor.
+    std::string post   = "";
+    std::string prefix = GetNodeData(node)->id();
+    for (int idx = 0; idx < 1; ++idx) {
+      CHECK(tensor_map.count(prefix)) << "Can't find output tensor " << prefix;
+      if (!tensor_map.count(prefix + post)) {
+        break;
+      }
+      auto tensor = tensor_map[prefix + post];
+      arg_tensors.push_back(tensor);
+      // output args
+      func_args.emplace_back(tensor->buffer, ir::Argument::IO::kOutput);
+      // update post
+      post = "_" + std::to_string(idx);
+    }
+  }
+  auto func_body = ir_sch.GetModule().GetExprs().at(0);
+#ifdef CINN_WITH_CUDA
+  optim::OptimizeExprGPU(&(func_body));
+#endif
+
+  auto temp_buffers = lang::GetTempBuffers1(arg_tensors, func_body);
+  std::cout << "func_args size: " << func_args.size() << std::endl;
+  auto func =
+      ir::_LoweredFunc_::Make(group->GetFuncName(), func_args, ir_sch.GetModule().GetExprs().at(0), temp_buffers);
+  return {func};
+}
+
 std::vector<Expr> OpLowerer::IRElementwiseCompute(poly::StageMap& stages,
                                                   std::vector<ir::Tensor>& func_tensors,
                                                   std::unordered_map<std::string, ir::Tensor>& tensor_map,
@@ -287,7 +340,10 @@ std::vector<Expr> OpLowerer::IRElementwiseCompute(poly::StageMap& stages,
     tensor_inputs.push_back(expr.as_tensor_ref());
     tensor_map[node_data->id()] = expr.as_tensor_ref();
 
-    auto func = lang::LowerVec("fn_" + node->id(), node_stages, tensor_inputs, {}, {}, nullptr, this->target_, true);
+    // auto func = lang::LowerVec("fn_" + node->id(), node_stages, tensor_inputs, {}, {}, nullptr, this->target_, true);
+    // std::vector<ir::LoweredFunc> func{pack[0].operator ir::Expr().as_lowered_func_ref()};
+    auto func = ConstructLoweredFunc(pack[0], group, func_tensors, tensor_map);
+
     CHECK_EQ(func.size(), 1);
 
     if (apply_impl_schedule) {
@@ -364,7 +420,8 @@ std::vector<Expr> OpLowerer::IRReduceCompute(poly::StageMap& stages,
         tensor_inputs.push_back(expr.as_tensor_ref());
       }
     }
-    auto func = lang::LowerVec("fn_" + node->id(), tmp_stages, tensor_inputs, {}, {}, nullptr, this->target_, true);
+    // auto func = lang::LowerVec("fn_" + node->id(), tmp_stages, tensor_inputs, {}, {}, nullptr, this->target_, true);
+    std::vector<ir::LoweredFunc> func{pack[0].operator ir::Expr().as_lowered_func_ref()};
 
     // node is kReduction
     if (op_pattern_dict[node->op()] == framework::kReduction && apply_impl_schedule) {
@@ -469,7 +526,8 @@ std::vector<ir::LoweredFunc> OpLowerer::IRLowerNonFusibleOp(GroupPtr& group, boo
   }
 
   poly::StageMap stages = pack.back();
-  auto func             = lang::LowerVec(group->GetFuncName(), stages, inputs, {}, {}, nullptr, this->target_, true);
+  // auto func             = lang::LowerVec(group->GetFuncName(), stages, inputs, {}, {}, nullptr, this->target_, true);
+  std::vector<ir::LoweredFunc> func{pack[0].operator ir::Expr().as_lowered_func_ref()};
 
   if (apply_impl_schedule) {
     std::vector<common::CINNValue> schedule_inputs;
