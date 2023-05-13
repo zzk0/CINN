@@ -61,7 +61,7 @@ class OpLowerer {
   std::vector<ir::LoweredFunc> LowerWithoutSchedule(GroupPtr& group);
 
  private:
-  std::vector<ir::LoweredFunc> IRLowerOp(IRComputeFunction, IRScheduleFunction, GroupPtr&);
+  std::vector<ir::LoweredFunc> IRLowerOp(IRComputeFunction, GroupPtr&);
   std::vector<ir::LoweredFunc> IRLowerNonFusibleOp(GroupPtr&, bool);
   std::vector<ir::LoweredFunc> IRLowerOpWithoutSchedule(IRComputeFunction, GroupPtr&);
 #define DEFINE_IR_COMPUTE_SCHDULE(type)                                                        \
@@ -70,14 +70,7 @@ class OpLowerer {
                                       std::unordered_map<std::string, ir::Tensor>& tensor_map, \
                                       const GroupPtr& group,                                   \
                                       const GroupPtr& sub_group,                               \
-                                      bool apply_impl_schedule = false);                       \
-  void IR##type##Schedule(ir::IRSchedule& ir_sch,                                              \
-                          std::unordered_map<std::string, ir::Tensor>& tensor_map,             \
-                          const GroupPtr& group,                                               \
-                          const GroupPtr& sub_group,                                           \
-                          Node*& first,                                                        \
-                          Node*& second);
-
+                                      bool apply_impl_schedule = false);
   // compute and schedule
   DEFINE_IR_COMPUTE_SCHDULE(Elementwise);
   DEFINE_IR_COMPUTE_SCHDULE(Reduce);
